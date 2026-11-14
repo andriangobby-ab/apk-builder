@@ -25,11 +25,9 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // ПРОВЕРКА: Если внутри нас уже вшита игра — сразу запускаем её!
         if (hasEmbeddedGame()) {
             startGameWebView()
         } else {
-            // Иначе показываем экран Конструктора APK
             showBuilderScreen()
         }
     }
@@ -43,7 +41,6 @@ class MainActivity : Activity() {
         }
     }
 
-    // ==================== РЕЖИМ 1: ЗАПУСК ИГРЫ ====================
     @SuppressLint("SetJavaScriptEnabled")
     private fun startGameWebView() {
         window.decorView.systemUiVisibility = (View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
@@ -69,14 +66,13 @@ class MainActivity : Activity() {
         webView.loadUrl("https://appassets.androidplatform.net/game/index.html")
     }
 
-    // ==================== РЕЖИМ 2: КОНСТРУКТОР APK ====================
     private fun showBuilderScreen() {
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(60, 100, 60, 60)
         }
 
-        nameInput = EditText(this).apply {
+    nameInput = EditText(this).apply {
             hint = "Название игры (латиницей)"
             setText("My Awesome Game")
         }
@@ -120,16 +116,14 @@ class MainActivity : Activity() {
         }
     }
 
-    // ==================== КЛОНИРОВАНИЕ СЕБЯ + ВШИВАНИЕ ZIP ====================
     private fun buildSelfClonedApk(gameZipUri: Uri, gameTitle: String, signedApk: File) {
         val selfApkFile = File(applicationInfo.sourceDir)
         val unsignedTemp = File(cacheDir, "temp_unsigned.apk")
-        val randomId = UUID.randomUUID().toString().replace("-", "").take(12)
+        val randomId = UUID.randomUUID().toString().replace("-", "").lowercase().filter { it in 'a'..'z' || it in '0'..'9' }.take(12)
 
         ZipOutputStream(BufferedOutputStream(FileOutputStream(unsignedTemp))).use { zipOut ->
             zipOut.setLevel(1)
 
-            // 1. Копируем себя (кроме старой подписи META-INF)
             ZipInputStream(BufferedInputStream(FileInputStream(selfApkFile))).use { selfIn ->
                 var entry = selfIn.nextEntry
                 while (entry != null) {
@@ -156,7 +150,6 @@ class MainActivity : Activity() {
                 }
             }
 
-            // 2. Потоково дописываем файлы из пользовательского ZIP внутрь assets/game/
             contentResolver.openInputStream(gameZipUri)?.use { raw ->
                 ZipInputStream(BufferedInputStream(raw, 256 * 1024)).use { gameIn ->
                     var entry = gameIn.nextEntry
@@ -173,24 +166,30 @@ class MainActivity : Activity() {
             }
         }
 
-        // 3. Подписываем APK встроенным ключом из assets/debug.p12
         signWithBuiltInCert(unsignedTemp, signedApk)
         unsignedTemp.delete()
     }
 
     private fun patchManifest(bytes: ByteArray, title: String, id: String): ByteArray {
+        val pkgStr = "com.selfapk.game$id" // Ровно 26 символов (14 + 12)
+        val titleStr = title.padEnd(28, ' ').take(28) // Ровно 28 символов
+
         val oldPkg = "com.selfapk.game000000000000".toByteArray(StandardCharsets.UTF_16LE)
-        val newPkg = "com.selfapk.game$id".padEnd(28, '0').take(28).toByteArray(StandardCharsets.UTF_16LE)
+        val newPkg = pkgStr.toByteArray(StandardCharsets.UTF_16LE)
         val oldTitle = "HTML_GAME_000000000000000000".toByteArray(StandardCharsets.UTF_16LE)
-        val newTitle = title.padEnd(28, ' ').take(28).toByteArray(StandardCharsets.UTF_16LE)
+        val newTitle = titleStr.toByteArray(StandardCharsets.UTF_16LE)
 
         val out = bytes.copyOf()
         for (i in 0..out.size - oldPkg.size) {
             if (out.sliceArray(i until i + oldPkg.size).contentEquals(oldPkg)) {
                 System.arraycopy(newPkg, 0, out, i, newPkg.size)
+                break
             }
+        }
+        for (i in 0..out.size - oldTitle.size) {
             if (out.sliceArray(i until i + oldTitle.size).contentEquals(oldTitle)) {
                 System.arraycopy(newTitle, 0, out, i, newTitle.size)
+                break
             }
         }
         return out
