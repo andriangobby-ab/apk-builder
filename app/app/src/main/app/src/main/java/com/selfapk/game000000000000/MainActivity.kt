@@ -56,12 +56,16 @@ class MainActivity : Activity() {
         }
     }
 
-    @SuppressLint("SetJavaScriptEnabled")
+    // ==================== РЕЖИМ ИГРЫ (БЕЗ PULL-TO-REFRESH И ОТСКОКОВ) ====================
+    @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
     private fun startGameWebView() {
         window.decorView.systemUiVisibility = (View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
                 or View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION)
 
-        val webView = WebView(this)
+        val webView = WebView(this).apply {
+            // Полностью убираем системный эффект резинки (overscroll) при попытке свайпа вверх или вниз
+            overScrollMode = View.OVER_SCROLL_NEVER
+        }
         setContentView(webView)
 
         val loader = WebViewAssetLoader.Builder()
@@ -73,15 +77,25 @@ class MainActivity : Activity() {
             domStorageEnabled = true
             allowFileAccess = true
             mediaPlaybackRequiresUserGesture = false
+            // Отключаем масштабирование жестами, чтобы игра не прыгала при случайных касаниях
+            supportZoom()
+            builtInZoomControls = false
+            displayZoomControls = false
         }
+
         webView.webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(v: WebView, req: WebResourceRequest) =
                 loader.shouldInterceptRequest(req.url)
+
+            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                return false
+            }
         }
+
         webView.loadUrl("https://appassets.androidplatform.net/game/index.html")
     }
 
-    // ==================== РАСШИРЕННЫЙ КОНСТРУКТОР (FreeAppToApk Style) ====================
+    // ==================== РЕЖИМ КОНСТРУКТОРА APK (FreeAppToApk Style) ====================
     private fun showBuilderScreen() {
         val scrollView = ScrollView(this).apply {
             setPadding(40, 40, 40, 40)
@@ -186,10 +200,10 @@ class MainActivity : Activity() {
             selectedZipUri = data?.data
             val gameTitle = nameInput.text.toString().ifBlank { "MyGame" }
             val customPkg = pkgInput.text.toString().ifBlank { "com.game.app" }
-            val orientationChoice = orientationSpinner.selectedItemPosition // 0-Landscape, 1-Portrait, 2-Sensor
+            val orientationChoice = orientationSpinner.selectedItemPosition
             val isFullscreen = fullscreenCheck.isChecked
 
-            statusText.text = "⏳ Компилируем APK с вашими настройками..."
+            statusText.text = "⏳ Компилируем APK без ограничений по весу..."
 
             thread {
                 try {
@@ -209,7 +223,7 @@ class MainActivity : Activity() {
         }
     }
 
-    // ==================== ЯДРО СБОРКИ С УЧЕТОМ НАСТРОЕК ====================
+    // ==================== ЯДРО СБОРКИ (ZIP64 + ИКОНКА + МАНИФЕСТ) ====================
     private fun buildProApk(
         gameZipUri: Uri, 
         iconUri: Uri?, 
@@ -222,8 +236,6 @@ class MainActivity : Activity() {
         val selfApkFile = File(applicationInfo.sourceDir)
         val unsignedTemp = File(cacheDir, "temp_unsigned.apk")
         val randomSuffix = UUID.randomUUID().toString().replace("-", "").lowercase().take(6)
-        
-        // Безопасный пакет (дописываем суффикс, чтобы не было конфликтов)
         val finalPkg = "$customPkg.$randomSuffix".take(50)
 
         val customIconBytes = iconUri?.let { uri ->
@@ -247,7 +259,7 @@ class MainActivity : Activity() {
                         val newEntry = ZipEntry(name)
 
                         if (name == "AndroidManifest.xml") {
-                            val bytes = patchManifestAndSettings(selfIn.readBytes(), gameTitle, finalPkg, orientation, isFullscreen)
+                            val bytes = patchManifestAndSettings(selfIn.readBytes(), gameTitle, finalPkg)
                             zipOut.putNextEntry(newEntry)
                             zipOut.write(bytes)
                         } else if (name == "resources.arsc") {
@@ -271,7 +283,7 @@ class MainActivity : Activity() {
                 }
             }
 
-            // Упаковка игровых файлов
+            // Потоковое добавление гигабайтов игры в assets/game/
             contentResolver.openInputStream(gameZipUri)?.use { raw ->
                 ZipInputStream(BufferedInputStream(raw, 256 * 1024)).use { gameIn ->
                     var entry = gameIn.nextEntry
@@ -292,7 +304,7 @@ class MainActivity : Activity() {
         unsignedTemp.delete()
     }
 
-    private fun patchManifestAndSettings(bytes: ByteArray, title: String, pkg: String, orientation: Int, isFullscreen: Boolean): ByteArray {
+    private fun patchManifestAndSettings(bytes: ByteArray, title: String, pkg: String): ByteArray {
         val oldPkg = "com.selfapk.game000000000000".toByteArray(StandardCharsets.UTF_16LE)
         val newPkg = pkg.padEnd(28, '0').take(28).toByteArray(StandardCharsets.UTF_16LE)
         
