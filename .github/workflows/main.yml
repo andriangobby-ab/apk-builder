@@ -19,9 +19,17 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: 3. Автосоздание ключа подписи debug.p12 в папке assets
+      - name: 3. Автопочинка папок, gradle.properties и ключа
         run: |
+          echo "android.useAndroidX=true" > gradle.properties
+          echo "org.gradle.jvmargs=-Xmx2048m" >> gradle.properties
           mkdir -p app/src/main/assets
+          mkdir -p app/src/main/java/com/selfapk/game000000000000
+
+          # Если файлы случайно попали в app/app/..., переносим их на правильное место:
+          find . -name "AndroidManifest.xml" -exec cp {} app/src/main/AndroidManifest.xml \;
+          find . -name "MainActivity.kt" -exec cp {} app/src/main/java/com/selfapk/game000000000000/MainActivity.kt \;
+
           keytool -genkeypair -v \
             -keystore app/src/main/assets/debug.p12 \
             -storetype PKCS12 \
@@ -33,7 +41,7 @@ jobs:
             -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
-      - name: 4. Установка Gradle и сборка APK
+      - name: 4. Установка Gradle
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: '8.6'
@@ -41,7 +49,7 @@ jobs:
       - name: 5. Компиляция APK
         run: gradle assembleDebug
 
-      - name: 6. Выгрузка готового APK для скачивания
+      - name: 6. Выгрузка готового APK
         uses: actions/upload-artifact@v4
         with:
           name: Ready-APK-Converter
