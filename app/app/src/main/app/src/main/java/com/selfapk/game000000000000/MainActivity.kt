@@ -3,6 +3,8 @@ package com.selfapk.game000000000000
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
@@ -21,6 +23,15 @@ class MainActivity : Activity() {
 
     private lateinit var statusText: TextView
     private lateinit var nameInput: EditText
+    private lateinit var iconPreview: ImageView
+    
+    private var selectedZipUri: Uri? = null
+    private var selectedIconUri: Uri? = null
+
+    companion object {
+        private const val REQ_ZIP = 100
+        private const val REQ_ICON = 101
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -66,80 +77,139 @@ class MainActivity : Activity() {
         webView.loadUrl("https://appassets.androidplatform.net/game/index.html")
     }
 
+    // ==================== ЭКРАН НАСТРОЙКИ И СОЗДАНИЯ APK ====================
     private fun showBuilderScreen() {
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(60, 100, 60, 60)
+            setPadding(50, 60, 50, 60)
         }
 
-    nameInput = EditText(this).apply {
+        val titleLabel = TextView(this).apply {
+            text = "🎮 Создатель APK для HTML5 игр"
+            textSize = 20f
+            setPadding(0, 0, 0, 30)
+        }
+
+        nameInput = EditText(this).apply {
             hint = "Название игры (латиницей)"
             setText("My Awesome Game")
+            setPadding(20, 20, 20, 20)
         }
 
-        val btnPick = Button(this).apply {
-            text = "📦 Выбрать ZIP и создать APK"
+        val btnPickIcon = Button(this).apply {
+            text = "🖼️ Выбрать иконку (PNG / JPG)"
+            setOnClickListener {
+                val intent = Intent(Intent.ACTION_GET_CONTENT).apply { type = "image/*" }
+                startActivityForResult(intent, REQ_ICON)
+            }
+        }
+
+        iconPreview = ImageView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(150, 150).apply { setMargins(0, 10, 0, 20) }
+            setImageResource(android.R.drawable.sym_def_app_icon)
+        }
+
+        val btnPickZip = Button(this).apply {
+            text = "📦 Выбрать ZIP-архив с игрой"
             setOnClickListener {
                 val intent = Intent(Intent.ACTION_GET_CONTENT).apply { type = "application/zip" }
-                startActivityForResult(intent, 100)
+                startActivityForResult(intent, REQ_ZIP)
             }
         }
 
         statusText = TextView(this).apply {
-            text = "Выбери ZIP с index.html и картинками .jpg любого размера.\nГотовый APK появится в папке Загрузки (Downloads)."
-            setPadding(0, 40, 0, 0)
+            text = "1. Введите название\n2. Выберите иконку (по желанию)\n3. Выберите ZIP с игрой\nГотовый APK сохранится в «Загрузки»."
+            setPadding(0, 30, 0, 0)
         }
 
+        layout.addView(titleLabel)
         layout.addView(nameInput)
-        layout.addView(btnPick)
+        layout.addView(btnPickIcon)
+        layout.addView(iconPreview)
+        layout.addView(btnPickZip)
         layout.addView(statusText)
         setContentView(layout)
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        val zipUri = data?.data ?: return
-        val title = nameInput.text.toString().ifBlank { "MyGame" }
-        statusText.text = "⏳ Собираем APK... Подожди..."
+        super.onActivityResult(requestCode, resultCode, data)
+        if (resultCode != RESULT_OK) return
 
-        thread {
+        if (requestCode == REQ_ICON) {
+            selectedIconUri = data?.data
             try {
-                val outDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                val outApk = File(outDir, "${title.replace(" ", "_")}.apk")
-                buildSelfClonedApk(zipUri, title, outApk)
-                runOnUiThread {
-                    statusText.text = "✅ Готово! Твой APK лежит в папке «Загрузки»:\n${outApk.absolutePath}"
-                }
+                val inputStream = contentResolver.openInputStream(selectedIconUri!!)
+                val bitmap = BitmapFactory.decodeStream(inputStream)
+                iconPreview.setImageBitmap(bitmap)
+                Toast.makeText(this, "Иконка выбрана!", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
-                e.printStackTrace()
-                runOnUiThread { statusText.text = "❌ Ошибка: ${e.message}" }
+                Toast.makeText(this, "Ошибка загрузки иконки", Toast.LENGTH_SHORT).show()
+            }
+        } else if (requestCode == REQ_ZIP) {
+            selectedZipUri = data?.data
+            val title = nameInput.text.toString().ifBlank { "MyGame" }
+            statusText.text = "⏳ Собираем APK... Подожди пару секунд..."
+
+            thread {
+                try {
+                    val outDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                    val outApk = File(outDir, "${title.replace(" ", "_")}.apk")
+                    buildCustomizedApk(selectedZipUri!!, selectedIconUri, title, outApk)
+                    runOnUiThread {
+                        statusText.text = "✅ Успешно!\nAPK сохранен в Загрузки:\n${outApk.absolutePath}"
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                    runOnUiThread { statusText.text = "❌ Ошибка: ${e.message}" }
+                }
             }
         }
     }
 
-    private fun buildSelfClonedApk(gameZipUri: Uri, gameTitle: String, signedApk: File) {
+    // ==================== СБОРКА И КАСТОМИЗАЦИЯ APK ====================
+    private fun buildCustomizedApk(gameZipUri: Uri, iconUri: Uri?, gameTitle: String, signedApk: File) {
         val selfApkFile = File(applicationInfo.sourceDir)
         val unsignedTemp = File(cacheDir, "temp_unsigned.apk")
         val randomId = UUID.randomUUID().toString().replace("-", "").lowercase().filter { it in 'a'..'z' || it in '0'..'9' }.take(12)
 
+        // Конвертируем выбранную иконку в ByteArray (если выбрана)
+        val customIconBytes = iconUri?.let { uri ->
+            contentResolver.openInputStream(uri)?.use { stream ->
+                val bmp = BitmapFactory.decodeStream(stream)
+                val scaled = Bitmap.createScaledBitmap(bmp, 192, 192, true)
+                val bos = ByteArrayOutputStream()
+                scaled.compress(Bitmap.CompressFormat.PNG, 90, bos)
+                bos.toByteArray()
+            }
+        }
+
         ZipOutputStream(BufferedOutputStream(FileOutputStream(unsignedTemp))).use { zipOut ->
             zipOut.setLevel(1)
 
+            // 1. Копируем себя (заменяя манифест, иконки и пропуская старую подпись)
             ZipInputStream(BufferedInputStream(FileInputStream(selfApkFile))).use { selfIn ->
                 var entry = selfIn.nextEntry
                 while (entry != null) {
-                    if (!entry.name.startsWith("META-INF/")) {
-                        val newEntry = ZipEntry(entry.name)
-                        if (entry.name == "AndroidManifest.xml") {
+                    val name = entry.name
+                    if (!name.startsWith("META-INF/")) {
+                        val newEntry = ZipEntry(name)
+
+                        if (name == "AndroidManifest.xml") {
                             val bytes = patchManifest(selfIn.readBytes(), gameTitle, randomId)
                             zipOut.putNextEntry(newEntry)
                             zipOut.write(bytes)
-                        } else if (entry.name == "resources.arsc") {
+                        } else if (name == "resources.arsc") {
                             val bytes = selfIn.readBytes()
                             newEntry.method = ZipEntry.STORED
                             newEntry.size = bytes.size.toLong()
                             newEntry.crc = CRC32().apply { update(bytes) }.value
                             zipOut.putNextEntry(newEntry)
                             zipOut.write(bytes)
+                        } else if (customIconBytes != null && (name.contains("mipmap") || name.contains("drawable")) && name.endsWith(".png")) {
+                            // Заменяем стандартные иконки приложения на картинку пользователя
+                            newEntry.method = ZipEntry.DEFLATED
+                            zipOut.putNextEntry(newEntry)
+                            zipOut.write(customIconBytes)
                         } else {
                             zipOut.putNextEntry(newEntry)
                             selfIn.copyTo(zipOut, 128 * 1024)
@@ -150,6 +220,7 @@ class MainActivity : Activity() {
                 }
             }
 
+            // 2. Потоково дописываем игровые файлы из ZIP в assets/game/
             contentResolver.openInputStream(gameZipUri)?.use { raw ->
                 ZipInputStream(BufferedInputStream(raw, 256 * 1024)).use { gameIn ->
                     var entry = gameIn.nextEntry
@@ -171,8 +242,8 @@ class MainActivity : Activity() {
     }
 
     private fun patchManifest(bytes: ByteArray, title: String, id: String): ByteArray {
-        val pkgStr = "com.selfapk.game$id" // Ровно 26 символов (14 + 12)
-        val titleStr = title.padEnd(28, ' ').take(28) // Ровно 28 символов
+        val pkgStr = "com.selfapk.game$id"
+        val titleStr = title.padEnd(28, ' ').take(28)
 
         val oldPkg = "com.selfapk.game000000000000".toByteArray(StandardCharsets.UTF_16LE)
         val newPkg = pkgStr.toByteArray(StandardCharsets.UTF_16LE)
